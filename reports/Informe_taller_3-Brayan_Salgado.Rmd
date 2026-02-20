@@ -1,0 +1,949 @@
+---
+title: "Modelado del rendimiento académico en educación secundaria"
+author: "Brayan Alexander Salgado"
+date: "`r Sys.Date()`"
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+
+fontsize: 11pt
+lang: es
+---
+
+```{r LIBRERIAS, include=FALSE}
+
+# LIBRERIAS
+
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(tidyr)
+library(tibble)
+library(dplyr)
+library(plotly)
+library(broom)
+library(modelsummary)
+library(lmtest)
+library(car)
+library(stargazer)
+library(nortest)
+library(sandwich)
+library(here)
+```
+
+```{r Cargar_datos, include=FALSE}
+
+here()   # solo para verificar raíz
+
+# Cargar datos crudos
+mat <- read.csv(here("data", "raw", "student-mat.csv"), sep = ";")
+por <- read.csv(here("data", "raw", "student-por.csv"), sep = ";")
+
+
+# Vista rápida de estructura
+
+glimpse(mat)
+glimpse(por)
+
+# Dimensiones
+
+cat("Número de observaciones en MAT:", nrow(mat), "\n")
+cat("Número de observaciones en POR:", nrow(por), "\n")
+```
+
+```{r knitr, include=FALSE}
+# Configuración para que el informe sea limpio
+
+knitr::opts_chunk$set(
+  echo = TRUE, 
+  message = FALSE, 
+  warning = FALSE,
+  fig.path = here("outputs", "figures/"),
+  fig.align = 'center',
+  fig.width = 9, 
+  fig.height = 6
+)
+```
+
+# Introducción
+
+El presente informe tiene como propósito analizar el rendimiento académico de estudiantes de secundaria en Portugal, utilizando los datos del *Student Performance Dataset* (Cortez & Silva, 2008). El análisis se desarrolla mediante la estimación de modelos de **regresión lineal simple**, diferenciados para las asignaturas de **Matemáticas** y **Lengua Portuguesa**.
+
+A lo largo del documento se realizará la exploración de los datos, el ajuste de modelos, la verificación de supuestos, la construcción de intervalos de confianza, y la generación de predicciones para la calificación final (variable *G3*).
+
+# Exploración inicial de los datos
+
+A continuación, se muestra una breve descripción de las variables en las bases de datos. Recordando que el estudio original buscó predecir el rendimiento académico de los estudiantes de secundaria en Portugal, específicamente en las asignaturas de Matemáticas y Portugués, a partir de variables personales, sociales y escolares.
+
+Entre las preguntas que querían responder estaban: **¿qué factores influyen más en las calificaciones finales?** Y, **¿es posible predecir el desempeño (variable G3) usando información socioeconómica, demográfica y de comportamiento?**
+
+```{r tab-vars, echo=FALSE, message=FALSE}
+
+# Crear tabla descriptiva
+tabla_vars <- tribble(
+  ~"Categoría",              ~"Variable",                     ~"Descripción / Categorías principales",
+  "Rendimiento académico", "G1, G2, G3",                  "Calificaciones en los tres períodos (0–20).",
+  "Datos del estudiante",  "sex",                         "Sexo del estudiante (F = Femenino, M = Masculino).",
+  "",                      "age",                         "Edad del estudiante (15–22 años).",
+  "",                      "address",                     "Tipo de residencia (U = Urbana, R = Rural).",
+  "",                      "famsize",                     "Tamaño familiar (LE3 = ≤3, GT3 = >3).",
+  "",                      "Pstatus",                     "Estado de convivencia de los padres (T = juntos, A = separados).",
+  "Padres",                "Medu, Fedu",                  "Nivel educativo de la madre y el padre (0 = ninguno, 4 = superior).",
+  "",                      "Mjob, Fjob",                  "Ocupación de la madre/padre (Docencia, salud, servicios, en casa, otro).",
+  "Factores escolares",    "Escuela",                      "Centro educativo (GP, MS).",
+  "",                      "studytime",                   "Tiempo semanal de estudio (1–4; de menor a mayor).",
+  "",                      "failures",                    "Número de cursos reprobados.",
+  "",                      "schoolsup, famsup, paid",     "Apoyos educativos (Sí/no).",
+  "",                      "activities, nursery, higher", "Participación en actividades extracurriculares o preescolar, aspiración a educación superior (Sí/no).",
+  "Factores personales y sociales", "internet, romantic",  "Acceso a internet, relación sentimental (Sí/no).",
+  "",                      "freetime, goout",             "Tiempo libre y frecuencia de salidas con amigos (1–5).",
+  "",                      "Dalc, Walc",                  "Consumo de alcohol entre semana y fines de semana (1–5).",
+  "",                      "health",                      "Estado de salud percibido (1–5).",
+  "",                      "absences",                    "Número de ausencias escolares."
+)
+
+# Mostrar tabla
+kable(tabla_vars,
+      caption = "Descripción de variables incluidas en el estudio",
+      align = "c")
+```
+
+Entre los principales resultados encontrados notaron que:
+
+- Las notas previas (G1 y G2) fueron los predictores más fuertes del rendimiento final (G3) (ver gráfico \@ref(fig:fig-dispersion)).
+- Variables como ausencias, consumo de alcohol, tiempo de estudio y nivel educativo de los padres también influyeron significativamente, pero en menor medida.
+- Factores familiares y escolares son más determinantes que los puramente demográficos.
+- El estudio destacó el potencial de modelos de IA para apoyar decisiones educativas tempranas, como identificar estudiantes en riesgo de bajo rendimiento.
+
+```{r fig-disper, include=FALSE}
+
+# Convertir a formato largo para comparar G1 y G2 respecto a G3
+mat_long <- mat %>%
+  select(G1, G2, G3) %>%
+  pivot_longer(cols = c(G1, G2), names_to = "Evaluación", values_to = "Calificación")
+```
+
+```{r fig-dispersion, echo=FALSE, fig.cap="Relación entre calificaciones parciales (G1, G2) y nota final (G3)"}
+# Gráfico de dispersión con línea de tendencia
+ggplot(mat_long, aes(x = Calificación, y = G3, color = Evaluación)) +
+  geom_point(alpha = 0.6) +
+  labs(
+    x = "Calificación parcial (G1 o G2)",
+    y = "Nota final (G3)",
+    color = "Evaluación",
+    title = "Relación entre calificaciones parciales y nota final - Matemáticas"
+  ) +
+    geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal()
+```
+Con esto de base, se parte de mostrar cómo se distribuyen los resultados en G3 para ambos temas: matemáticas y lengua portuguesa.
+
+```{r tabla-resumen-mat, echo=FALSE, message=FALSE, warning=FALSE}
+# Seleccionar variables a resumir
+vars <- c("G1", "G2", "G3")
+
+# Función que devuelve las 6 estadísticas en el orden clásico
+stats_fun <- function(x){
+  c(
+    Min      = min(x, na.rm = TRUE),
+    `1st Qu` = quantile(x, 0.25, na.rm = TRUE),
+    Median   = median(x, na.rm = TRUE),
+    Mean     = mean(x, na.rm = TRUE),
+    `3rd Qu` = quantile(x, 0.75, na.rm = TRUE),
+    Max      = max(x, na.rm = TRUE),
+    SD       = sd(x, na.rm = TRUE),
+    n        = sum(!is.na(x))
+  )
+}
+
+# Crear tabla para MAT
+tabla_mat <- sapply(select(mat, all_of(vars)), stats_fun) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Estadístico") %>%
+  # opcional: redondear valores numéricos a 2 decimales
+  mutate(across(-Estadístico, ~ round(.x, 2)))
+
+# Mostrar tabla MAT
+kable(tabla_mat,
+      caption = "Resumen estadístico de las calificaciones en Matemáticas",
+      align = "c",
+      digits = 2)
+```
+```{r tabla-resumen-por, echo=FALSE, message=FALSE, warning=FALSE}
+# Crear tabla para POR (mismo procedimiento)
+tabla_por <- sapply(select(por, all_of(vars)), stats_fun) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Estadístico") %>%
+  mutate(across(-Estadístico, ~ round(.x, 2)))
+
+# Mostrar tabla POR
+kable(tabla_por,
+      caption = "Resumen estadístico de las calificaciones en Lengua Portuguesa",
+      align = "c",
+      digits = 2)
+```
+
+Los resultados descriptivos parecen mostrar que las calificaciones en ambas asignaturas presentan una distribución similar, aunque con ligeras diferencias en los niveles promedio y la dispersión. En Matemáticas, la nota media final (G3) es de 10.42 puntos, con una desviación estándar de 4.58, lo que indica una mayor variabilidad en el rendimiento estudiantil. En cambio, en Lengua Portuguesa el promedio de la nota final asciende a 11.91 con una desviación estándar menor (3.23), lo que sugiere un desempeño más homogéneo.
+
+En ambas materias, la mediana y los cuartiles reflejan una concentración de calificaciones entre 8 y 14 puntos, mientras que los valores mínimos y máximos muestran un rango amplio, evidenciando la presencia de estudiantes con desempeños muy bajos y muy altos. 
+
+Ahora bien, Al comparar la media y la mediana se podría esperar diferencias en la simetría de las distribuciones. En Matemáticas, la media (10.42) es ligeramente inferior a la mediana (11.00), lo que podría sugerir una asimetría negativa o sesgo hacia valores bajos: algunos estudiantes con notas muy bajas reducen el promedio general.
+
+Por el contrario, en Lengua Portuguesa la media (11.91) supera ligeramente a la mediana (12.00), lo que podría indica una asimetría positiva leve, es decir, una mayor concentración de estudiantes con calificaciones medias y altas, con pocos valores bajos que no afectan significativamente la tendencia central.
+
+En conjunto, el rendimiento en Matemáticas podría llegar a ser más desigual y con mayor dispersión que en Lengua Portuguesa; con posiblemente mayores retos. Es importante recalcar que en el caso de la lengua portuguesa se cuenta con 649 observaciones, considerablemente mayor a las 395 de la prueba en matemáticas; si bien la diferencia en n no causa directamente una asimetría, sí puede hacer que esta se exprese con mayor o menor intensidad según la sensibilidad del promedio a valores extremos.
+
+Gráficamente, los resultados se pueden mostrar a través de un diagrama de cajas o bigotes.
+
+```{r fig-boxplot, echo=FALSE, fig.cap="Distribución de la nota final (G3) por asignatura"}
+# Crear una tabla combinada para ambas asignaturas
+mat_por <- bind_rows(
+  mutate(mat, Asignatura = "Matemáticas"),
+  mutate(por, Asignatura = "Lengua Portuguesa")
+)
+
+ggplot(mat_por, aes(x = Asignatura, y = G3, fill = Asignatura)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.6) +
+  labs(
+    x = "Asignatura",
+    y = "Nota final (G3)",
+    title = "Distribución de las calificaciones finales por asignatura"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+El gráfico \@ref(fig:fig-boxplot)  muestra la distribución de las calificaciones finales (G3) para ambas asignaturas. Se observa de nuevo como los estudiantes obtienen, en promedio, mejores resultados en Lengua Portuguesa que en Matemáticas, reflejando una mediana más alta y una mayor concentración de valores en el rango de 10 a 15 puntos.
+
+En contraste, la distribución en Matemáticas es más dispersa, con una amplitud mayor entre los valores mínimos y máximos y una presencia más visible de estudiantes con notas bajas. Esto coincide con la desviación estándar más elevada encontrada en el resumen estadístico, indicando un rendimiento más heterogéneo.
+
+Además, ambas distribuciones presentan colas con valores bajos, lo que sugiere la existencia de casos atípicos o grupos de bajo desempeño, aunque estos parecen más notorios en Matemáticas.
+
+Ahora bien, relacionando G3 con las demás variables del dataset, se podría mostrar gráficamente lo siguiente:
+
+```{r fig-relaciones-num, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Relación entre la nota final (G3) y variables de interés: matemáticas"}
+
+# --- Selección de variables ---
+vars_numericas <- c("age", "traveltime", "studytime", "absences", "freetime", "G2")
+vars_categoricas <- c("sex", "address", "Medu", "Fjob", "Pstatus", "Dalc")
+
+# --- Transformar por separado ---
+num_long <- mat %>%
+  select(G3, all_of(vars_numericas)) %>%
+  pivot_longer(cols = all_of(vars_numericas),
+               names_to = "Variable",
+               values_to = "Valor_num") %>%
+  mutate(tipo = "numérica")
+
+cat_long <- mat %>%
+  select(G3, all_of(vars_categoricas)) %>%
+  mutate(across(all_of(vars_categoricas), as.character)) %>%
+  pivot_longer(cols = all_of(vars_categoricas),
+               names_to = "Variable",
+               values_to = "Valor") %>%
+  mutate(tipo = "categórica")
+
+# === Graficar por separado ===
+
+## Gráfico 1: variables numéricas
+p1 <- ggplot(num_long, aes(x = Valor_num, y = G3)) +
+  geom_point(alpha = 0.4, color = "#2C3E50") +
+  geom_smooth(method = "lm", se = FALSE, color = "#E74C3C") +
+  facet_wrap(~ Variable, scales = "free_x") +
+  labs(title = "Relación entre la nota final (G3) y variables numéricas",
+       x = "Valor de la variable",
+       y = "Nota final (G3)",
+       caption = "Líneas rojas = tendencia lineal") +
+  theme_minimal(base_size = 12)
+
+## Gráfico 2: variables categóricas
+p2 <- ggplot(cat_long, aes(x = Valor, y = G3)) +
+  geom_jitter(width = 0.2, alpha = 0.4, color = "#2C3E50") +
+  stat_summary(fun = mean, geom = "point", color = "#E74C3C", size = 3) +
+  facet_wrap(~ Variable, scales = "free_x") +
+  labs(title = "Relación entre la nota final (G3) y variables categóricas",
+       x = "Categorías",
+       y = "Nota final (G3)",
+       caption = "Puntos rojos = promedio por categoría") +
+  theme_minimal(base_size = 12)
+```
+
+```{r fig-relacion-mixto-interactivo, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Relación entre G3 y variables numéricas y categóricas (interactivo): matemáticas"}
+
+# Convertir los objetos ggplot en gráficos interactivos
+p1_interactivo <- ggplotly(p1)
+p2_interactivo <- ggplotly(p2)
+
+# Combinar ambos en un solo panel interactivo
+subplot(p1_interactivo, p2_interactivo,
+        nrows = 2,            # uno debajo del otro
+        shareX = FALSE,       # no forzar el mismo eje X
+        shareY = FALSE,       # no forzar el mismo eje Y
+        titleX = TRUE,        # mostrar títulos de ejes X
+        titleY = TRUE) %>%
+  layout(
+    title = list(
+      text = "Relación entre la nota final (G3) y variables numéricas y categóricas",
+      x = 0.5
+    ),
+    subtitle = "Resultados en matemáticas",
+    caption = "La línea muestra tendencia en variables cuantitativas, los puntos, la media en cualitativas",
+    showlegend = FALSE
+  )
+```
+
+```{r fig-relaciones-num-2, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Relación entre la nota final (G3) y variables de interés: portugués"}
+
+# --- Selección de variables ---
+vars_numericas <- c("age", "traveltime", "studytime", "absences", "freetime", "G2")
+vars_categoricas <- c("sex", "address", "Medu", "Fjob", "Pstatus", "Dalc")
+
+# --- Transformar por separado ---
+num_long <- por %>%
+  select(G3, all_of(vars_numericas)) %>%
+  pivot_longer(cols = all_of(vars_numericas),
+               names_to = "Variable",
+               values_to = "Valor_num") %>%
+  mutate(tipo = "numérica")
+
+cat_long <- por %>%
+  select(G3, all_of(vars_categoricas)) %>%
+  mutate(across(all_of(vars_categoricas), as.character)) %>%
+  pivot_longer(cols = all_of(vars_categoricas),
+               names_to = "Variable",
+               values_to = "Valor") %>%
+  mutate(tipo = "categórica")
+
+# === Graficar por separado ===
+
+## Gráfico 1: variables numéricas
+p1 <- ggplot(num_long, aes(x = Valor_num, y = G3)) +
+  geom_point(alpha = 0.4, color = "#2C3E50") +
+  geom_smooth(method = "lm", se = FALSE, color = "#E74C3C") +
+  facet_wrap(~ Variable, scales = "free_x") +
+  labs(title = "Relación entre la nota final (G3) y variables numéricas",
+       x = "Valor de la variable",
+       y = "Nota final (G3)",
+       caption = "Líneas rojas = tendencia lineal") +
+  theme_minimal(base_size = 12)
+
+## Gráfico 2: variables categóricas
+p2 <- ggplot(cat_long, aes(x = Valor, y = G3)) +
+  geom_jitter(width = 0.2, alpha = 0.4, color = "#2C3E50") +
+  stat_summary(fun = mean, geom = "point", color = "#E74C3C", size = 3) +
+  facet_wrap(~ Variable, scales = "free_x") +
+  labs(title = "Relación entre la nota final (G3) y variables categóricas",
+       x = "Categorías",
+       y = "Nota final (G3)",
+       caption = "Puntos rojos = promedio por categoría") +
+  theme_minimal(base_size = 12)
+```
+
+```{r fig-relacion-mixto-interactivo-2, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Relación entre G3 y variables numéricas y categóricas (interactivo): portugués"}
+
+# Convertir los objetos ggplot en gráficos interactivos
+p1_interactivo <- ggplotly(p1)
+p2_interactivo <- ggplotly(p2)
+
+# Combinar ambos en un solo panel interactivo
+subplot(p1_interactivo, p2_interactivo,
+        nrows = 2,            # uno debajo del otro
+        shareX = FALSE,       # no forzar el mismo eje X
+        shareY = FALSE,       # no forzar el mismo eje Y
+        titleX = TRUE,        # mostrar títulos de ejes X
+        titleY = TRUE) %>%
+  layout(
+    title = list(
+      text = "Relación entre la nota final (G3) y variables numéricas y categóricas",
+      x = 0.5
+    ),
+    subtitle = "Resultados en matemáticas",
+    caption = "La línea muestra tendencia en variables cuantitativas, los puntos, la media en cualitativas",
+    showlegend = FALSE
+  )
+```
+
+Las variables para revisar la relación existente entre los resultados mostrados por los estudiantes en el último corte _(G3)_, tanto en matemáticas como en portugués fueron seleccionadas considerando su posible influencia en el rendimiento académico final, ya sea por su naturaleza sociodemográfica o por su relación directa con el proceso educativo.
+
+En particular:
+
+* Variables numéricas:
+
+  - *age* : la edad puede reflejar diferencias en madurez, trayectoria escolar o rezago educativo.
+  - *traveltime* y *studytime*: ambas se relacionan con el tiempo disponible para estudiar y la accesibilidad al colegio, factores que inciden en el desempeño.
+  - *absences*: las ausencias afectan directamente la continuidad del aprendizaje.
+  - *freetime*: puede reflejar el equilibrio entre estudio y ocio.
+  - *G2*: representa el rendimiento previo del estudiante, una variable predictora clave del desempeño final.
+
+* Variables categóricas:
+
+  - *sex*: se incluye para observar posibles diferencias de rendimiento entre hombres y mujeres.
+  - *address*: distingue entre zonas urbanas y rurales, lo cual puede influir en oportunidades educativas.
+  - *Medu*: nivel educativo de la madre, que suele asociarse con apoyo académico y capital cultural.
+  - *Fjob*: ocupación del padre, indicador indirecto del contexto socioeconómico familiar.
+  - *Pstatus*: situación de convivencia de los padres, que puede afectar estabilidad emocional y apoyo en el hogar.
+  - *Dalc*: consumo de alcohol durante la semana, considerado un factor de riesgo para el rendimiento académico.
+
+En conjunto, estas variables permiten observar tanto factores individuales, familiares y contextuales que pueden explicar las variaciones en la nota final (G3).
+
+Los resultados muestran patrones interesantes sobre cómo distintos factores se relacionan con el rendimiento académico final (G3):
+
+* Entre las variables numéricas, se observa una relación positiva fuerte entre G2 y G3, lo que demuestra que el desempeño previo es un buen predictor del rendimiento final. En contraste, absences y traveltime tienden a mostrar una relación negativa, indicando que las ausencias frecuentes o los mayores tiempos de desplazamiento están asociados con menores calificaciones finales. Variables como studytime y freetime presentan relaciones más dispersas, sugiriendo que el tiempo de estudio por sí solo no garantiza un mejor resultado, sino que puede estar mediado por otros factores.
+
+* En cuanto a las variables categóricas, se destacan algunas diferencias. El rendimiento promedio en G3 parece ser ligeramente mayor en estudiantes que viven en zonas urbanas (address = U). Los estudiantes con madres de mayor nivel educativo (Medu) tienden a obtener mejores resultados, lo que coincide con la literatura sobre el papel del entorno familiar en el desempeño escolar. Por otro lado, un mayor consumo de alcohol durante la semana (Dalc) se asocia con menores promedios en G3, lo que sugiere un efecto negativo en la concentración y el hábito de estudio. Como dato de interés, mientras las mujeres presentan una ligera ventaja en los resultados de portugués, los hombres hacen lo propio en las evaluaciones de matemáticas.
+
+En conjunto, estos resultados indican que el rendimiento académico no depende de un solo factor, sino de una combinación de condiciones personales, familiares y de comportamiento que interactúan entre sí.
+
+Estos resultados iniciales proporcionan una base útil para el análisis de regresión que se desarrollará en el informe.
+
+# Regresión lineal simple
+De acuerdo con el objetivo del informe, los resultados de base que se han explorado y las principales conclusiones del ejercicio original, se estima un modelo de regresión lineal simple para predecir la nota en el período final _(G3)_ con base en la nota obtenida en el segundo período _(G2)_.
+
+## Ajuste del modelo
+Entre las variables numéricas exploradas, G2 (segunda calificación del periodo) presenta la relación más fuerte con G3, lo cual sugiere que el desempeño previo del estudiante es un buen predictor de su nota final.
+
+### Interpretación del modelo para Matemáticas
+a) Ecuación estimada
+
+El modelo ajustado para explicar la calificación final (G3) a partir de la calificación del segundo periodo (G2) es el siguiente:
+
+$$ \hat{G3} = 1,39 + 1,1 * G2 + \varepsilon $$
+
+```{r}
+# Modelo para Matemáticas
+modelo_mat <- lm(G3 ~ G2, data = mat)
+summary.lm(modelo_mat)
+```
+
+Esto significa que, en promedio, por cada punto adicional obtenido en G2, la nota final G3 aumenta en aproximadamente 1,10 puntos, manteniendo el resto constante. El intercepto indica que un estudiante con una calificación de 0 en G2 obtendría en promedio una nota final cercana a –1,39, lo cual no tiene interpretación práctica directa (ya que las notas no pueden ser negativas), pero representa el punto de corte teórico de la recta de regresión.
+
+```{r tabla-ols-mat, echo=FALSE, message=FALSE, warning=FALSE, tab.cap="Regresión para resultados en matemática"}
+
+# Resultados ordenados y redondeados
+tabla_mat <- tidy(modelo_mat) %>%
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 3),
+    p.value = format(p.value, scientific = TRUE, digits = 3)
+  )
+
+# Mostrar tablas:  Matemáticas
+kable(tabla_mat,
+      caption = "Coeficientes del modelo de regresión lineal simple para Matemáticas",
+      align = "c")
+```
+
+b) Significancia estadística de los coeficientes
+
+El coeficiente de G2 presenta un valor t = 42.14 y un p-valor < 2e-16, lo que indica una relación altamente significativa entre el desempeño en el segundo periodo y la nota final.
+El intercepto también resulta significativo (p = 3.77e-06), aunque su interpretación es menos relevante en términos prácticos.
+
+```{r tabla-meds-mat, echo=FALSE, message=FALSE, warning=FALSE, tab.cap="Medidas de ajuste del modelo para Matemáticas"}
+
+glance(modelo_mat)
+
+# Tabla de medidas de ajuste
+kable(glance(modelo_mat) %>% 
+    mutate(
+            r.squared = round(r.squared, 3),
+            adj.r.squared = round(adj.r.squared, 3),
+            statistic = round(statistic, 3),
+            p.value = format(p.value, scientific = TRUE, digits = 3),
+            AIC = round(AIC, 2),
+            BIC = round(BIC, 2)
+          ),
+      caption = "Medidas de ajuste del modelo para Matemáticas")
+```
+
+c) Bondad de ajuste del modelo
+
+El coeficiente de determinación (R² = 0.8188) muestra que el 81.9 % de la variabilidad en la nota final (G3) se explica únicamente por la calificación del segundo periodo (G2).
+El R² ajustado (0.8183), que penaliza por el número de predictores, es prácticamente igual, lo que confirma la estabilidad del modelo.
+
+Asimismo, la prueba F(1, 393) = 1776; p < 2.2e-16 evidencia que el modelo, en su conjunto, es altamente significativo, es decir, que existe evidencia suficiente para afirmar que G2 explica G3 de forma estadísticamente robusta.
+
+d) Análisis de residuos
+
+Los residuos muestran una dispersión relativamente simétrica (rango de –9.63 a 3.58), con mediana cercana a cero (0.27), lo que sugiere que no hay sesgo sistemático importante en las predicciones. No obstante, el valor mínimo algo extremo (–9.6) indica la posible existencia de algunos casos atípicos, que podrían revisarse más adelante mediante un análisis de diagnóstico.
+
+e) Conclusión
+
+El modelo de regresión lineal simple entre G3 y G2 para Matemáticas presenta una relación fuerte, positiva y altamente significativa, explicando más del 80 % de la variación en el rendimiento final de los estudiantes. Esto sugiere que el rendimiento acumulado durante el curso (medido en G2) es un excelente predictor del desempeño final en Matemáticas, confirmando la consistencia académica entre los periodos evaluativos.
+
+Sin embargo, es necesario realizar pruebas estadísticas sobre el cumplimiento de los supuestos en los residuos.
+
+### Interpretación del modelo para legua portuguesa
+a) Ecuación estimada
+
+$$ \hat{G3} = 0,122 + 1,018*G2 + \varepsilon $$
+```{r}
+# Modelo para Portugués
+modelo_por <- lm(G3 ~ G2, data = por)
+summary.lm(modelo_por)
+``` 
+
+Esto significa que la nota final (G3) puede predecirse a partir de la nota del segundo periodo (G2) mediante esta relación lineal.
+
+```{r tabla-ols-por, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Resultados ordenados y redondeados
+tabla_por <- tidy(modelo_por) %>%
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    statistic = round(statistic, 3),
+    p.value = format(p.value, scientific = TRUE, digits = 3)
+  )
+
+#Portugués
+kable(tabla_por,
+      caption = "Coeficientes del modelo de regresión lineal simple para Lengua Portuguesa",
+      align = "c")
+```
+
+b) Significancia estadística de los coeficientes
+Los resultados indican que el intercepto (β₀ = 0,122)	no es estadísticamente significativo _*(p = 0,553)*_.	Cuando la nota del segundo periodo (G2) es 0, la nota final esperada (G3) sería aproximadamente 0,122, aunque este valor carece de sentido práctico porque no hay estudiantes con G2 = 0. Por su parte, la pendiente (β₁ = 1,018), altamente significativa (p < 2e-16) muestra que, por cada punto adicional en G2, la nota final G3 aumenta en promedio 1,018 puntos. En otras palabras, G3 crece casi uno a uno con G2.
+
+El coeficiente de G2 es altamente significativo _*(p < 0,001)*_, lo que indica que existe una relación estadísticamente robusta entre G2 y G3. El intercepto no es significativo, lo que refuerza la idea de que la relación principal está completamente explicada por G2.
+
+```{r tabla-meds-por, echo=FALSE, message=FALSE, warning=FALSE, tab.cap="Medidas de ajuste del modelo para Portugués"}
+
+glance(modelo_por)
+
+# Tabla de medidas de ajuste
+kable(glance(modelo_por) %>% 
+    mutate(
+            r.squared = round(r.squared, 3),
+            adj.r.squared = round(adj.r.squared, 3),
+            statistic = round(statistic, 3),
+            p.value = format(p.value, scientific = TRUE, digits = 3),
+            AIC = round(AIC, 2),
+            BIC = round(BIC, 2)
+          ),
+      caption = "Medidas de ajuste del modelo para Lengua Portuguesa")
+```
+
+c) Bondad de ajuste del modelo
+Los resultados muestra que el R² del modelo es de 0,8437, es decir, el 84,4% de la variabilidad en G3 se explica por G2.	Por su parte, el R² ajustado de 0,8435	muestra un aAjuste casi idéntico, lo que confirma que el modelo es parsimonioso y robusto.
+
+Por su parte, el análisis de significancia global del modelo muestra que, con una F de 3493 _*(p < 2,2e-16)*_	el modelo global es altamente significativo.	
+
+d) Análisis de residuos
+Los residuos se distribuyen entre aproximadamente -9.31 y 5.69, con una mediana cercana a 0, lo que parece indicar ausencia de sesgo sistemático. La dispersión es relativamente baja, sugiriendo buen ajuste lineal.
+
+e) Conclusión general
+
+El modelo para Lengua Portuguesa muestra un excelente ajuste lineal entre la nota del segundo periodo (G2) y la nota final (G3). La relación es prácticamente proporcional (pendiente ≈ 1), lo que implica que el desempeño de los estudiantes en el segundo periodo predice casi perfectamente su desempeño final.
+
+
+### Comparación entre modelos
+En comparación con Matemáticas, el modelo de Portugués presenta:
+
+Un ajuste ligeramente superior (R² = 0.844 vs 0.819).
+
+Menor error residual (σ = 1.278 vs 1.953), lo que sugiere mayor precisión en las predicciones.
+
+```{r include=FALSE}
+
+# Crear tabla comparativa
+tabla_modelos <- modelsummary(
+  list("Matemáticas" = modelo_mat, "Portugués" = modelo_por),
+  statistic = c("std.error", "p.value"),
+  stars = TRUE,
+  gof_omit = "AIC|BIC|Log.Lik",
+  output = "data.frame"
+)
+```
+
+```{r tablaCompMods, echo=FALSE, message=FALSE, warning=FALSE, tab.cap="Resumen de ambos modelos: matemáticas y portugués"}
+
+# Crear tabla con estilos
+kable(tabla_modelos,
+      align = "c")
+```
+
+## Diagnóstico de supuestos
+Mediante un análisis de diagnóstico, se verifica si el modelo de regresión lineal simple cumple con los supuestos estadísticos fundamentales:
+
+- Linealidad de la relación entre las variables.
+- Normalidad de los residuos.
+- Homocedasticidad (varianza constante de los errores).
+- Independencia de los errores.
+- Identificación de valores influyentes o atípicos.
+
+A continuación, se presentan las pruebas y gráficos asociados a cada supuesto.
+
+###  Evaluación no formal de supuestos
+
+Los gráficos permiten observar patrones relevantes:
+
+* Residuos vs Ajustados: verifica la linealidad y homocedasticidad. Una distribución aleatoria sugiere que el modelo se ajusta bien.
+
+* QQ-Plot: evalúa la normalidad de los residuos; los puntos cercanos a la diagonal indican normalidad.
+
+* Residuos estandarizados: valores fuera del rango ±3 podrían considerarse atípicos.
+
+* Gráfico de apalancamiento (leverage): identifica observaciones con influencia excesiva sobre los coeficientes.
+
+```{r QQPlot1, echo=FALSE, fig.cap="Pruebas no formales: matemáticas"}
+par(mfrow=c(2,2))
+plot(modelo_mat)
+```
+
+En general, la gráfica nos da pista sobre que el modelo de Matemáticas presenta:
+
+- Cierta no linealidad entre G2 y G3,
+- Evidencia de heterocedasticidad,
+- Desviación de la normalidad de los residuos, y
+- Algunos casos influyentes puntuales.
+
+Esto sugiere que el modelo lineal simple podría no ser el más adecuado para describir completamente la relación entre las notas previas y finales.
+
+Podría considerarse:
+
+- Transformar variables (por ejemplo, log o cuadrática),
+- Aplicar un modelo polinómico o robusto, o
+- Evaluar métodos de regresión que manejen mejor la heterocedasticidad (como WLS).
+
+El análisis de diagnóstico para la prueba de Matemáticas muestra una ligera desviación de los supuestos del modelo lineal. Los residuos parecen presentan una tendencia no aleatoria y cierta heterocedasticidad, lo que indica que la relación entre las variables podría no ser completamente lineal. El gráfico Q-Q sugiere desviaciones leves de la normalidad en los extremos, y se observan algunos puntos influyentes, aunque sin comprometer de forma severa la validez general del modelo.
+
+### Pruebas formales de los supuestos
+A continuación, se realizan las pruebas de *_normalidad_* y *_homocedasticidad_* en los residuos para el modelo de predicción de resultados en matemáticas.
+
+```{r echo=FALSE}
+shapiro.test(residuals(modelo_mat))
+bptest(modelo_mat)  
+```
+
+Las pruebas confirman los que sugerían los gráficos. El test de Shapiro-Wilk (W = 0.71, p < 0.001) indica que los residuos no siguen una distribución normal (se rechaza la hipótesis), mientras que el test de Breusch-Pagan (BP = 15.01, p < 0.001) revela presencia de heterocedasticidad al también rechazarse la prueba de homocedasticidad.
+
+Por su parte, el test de Durbin-Watson (D–W = 1.87, p = 0.188) no muestra evidencia significativa de autocorrelación en los residuos del modelo. Por tanto, se cumple el supuesto de independencia de los errores.
+
+```{r echo=FALSE}
+durbinWatsonTest(modelo_mat)
+```
+
+Respecto al rango de los intervalos de confianza de los errores, se obtiene lo siguiente:
+
+```{r echo=FALSE}
+confint(modelo_mat)
+```
+Un intervalo de confianza al 95 % para un parámetro (como el intercepto o la pendiente) es un rango de valores plausibles dentro del cual se espera que se encuentre el valor real del parámetro poblacional con un 95 % de confianza. Si repitieras el experimento muchas veces y calcularas el mismo tipo de intervalo en cada muestra, aproximadamente el 95 % de esos intervalos contendrían el valor verdadero del parámetro poblacional.
+
+Con lo anterior, se espera que en la mayoría de las veces la relación entre la nota del segundo periodo (G2) y la nota final (G3) sea estadísticamente significativa y positiva: a medida que mejora la nota previa, también lo hace la nota final, en promedio.
+
+El análisis de diagnóstico del modelo de regresión lineal simple para la prueba de Matemáticas permitió evaluar el cumplimiento de los principales supuestos del modelo. Los resultados del test de Shapiro-Wilk (p < 0.001) indicaron que los residuos no siguen una distribución normal, mientras que la prueba de Breusch-Pagan (p = 0.0001) reveló la presencia de heterocedasticidad, sugiriendo que la varianza de los errores no es constante. Por otro lado, el estadístico de Durbin-Watson (D–W = 1.87; p = 0.188) mostró que no existe autocorrelación significativa entre los residuos, cumpliéndose así este supuesto. 
+
+A continuación, se resumen también los resultados de las pruebas para el modelo de predicción de las notas finales en portugués.
+
+```{r QQPlot2, echo=FALSE, fig.cap="Pruebas no formales: portugués"}
+par(mfrow = c(2, 2))
+plot(modelo_por)
+```
+Resultados similares a los encontrados en el modelo de matemáticas. Se espera que no se cumpla el supuesto de normalidad y homocedasticidad; además de tener problemas de linealidad.
+
+Formalmente,
+
+```{r echo=FALSE, tab.cap= "Resultados de ambos modelos"}
+# Normalidad de residuos (Shapiro-Wilk)
+shapiro_mat <- shapiro.test(residuals(modelo_mat))
+shapiro_por <- shapiro.test(residuals(modelo_por))
+
+# Homocedasticidad (Breusch-Pagan)
+bp_mat <- bptest(modelo_mat)
+bp_por <- bptest(modelo_por)
+
+# Independencia (Durbin-Watson)
+dw_mat <- durbinWatsonTest(modelo_mat)
+dw_por <- durbinWatsonTest(modelo_por)
+
+resultados_supuestos <- data.frame(
+Modelo = c("Matemáticas", "Portugués"),
+`p (Shapiro)` = c(shapiro_mat$p.value, shapiro_por$p.value),
+`p (Breusch-Pagan)` = c(bp_mat$p.value, bp_por$p.value),
+`p (Durbin-Watson)` = c(dw_mat$p, dw_por$p)
+)
+
+kable(resultados_supuestos,
+caption = "Pruebas de supuestos del modelo de regresión lineal simple",
+digits = 4)
+```
+Las pruebas permiten rechazar las hipótesis de normalidad y homocedasticidad en ambos modelos; a la vez que no es posible rechazar la hipótesisis de residuos autocorrelacionados.
+
+En ambos casos, es necesaria alguna transformación pequeña de los modelos que permita ajustar algunos de los supuestos del modelo de regresión simple. Podría empezarse por depurar posibles valores atípicos, revisar la necesidad de mantener el intercepto y/o (aunque no es el objetivo del ejercicio), considerar la necesidad de añadir otras variables explicativas en el modelo. 
+
+## Modelos ajustados
+Se realiza una transformación al modelo para estimar un modelo _log-log_ (es decir, se transforman en logaritmos tanto G3 como G2). Se decide eliminar el intercepto por falta de significancia o resultados negativos (contraintituitivos). Se decide mejorar los intervalos de los residuos añadiendo otras variables explicativas.
+
+El modelo a estimar fue, para ambos casos, el siguiente: 
+
+$$ \ln{(G3)}_i = \beta_1 * ln{(G2)}_i + \beta_2 * Ausencias_i + \beta_3 * Dirección_{rural} + \beta_4 * Dirección_{urbana} + \beta_5 * Sexo_{masculino} + \varepsilon_i $$
+
+```{r ajustes_mat, include=FALSE}
+# Crear columnas logarítmicas (evita log(0))
+mat$G2_2 <- ifelse(mat$G2 < 0, 0, mat$G2)
+
+mat$G2_log <- log(mat$G2_2 + 1)
+mat$G3_log <- log(mat$G3 + 1)
+
+modelo_mat2 <- lm(G3_log ~ G2_log - 1 + absences + address + sex, data = mat)
+summary.lm(modelo_mat2)
+``` 
+```{r ajustes_por, include=FALSE}
+# Crear columnas logarítmicas (evita log(0))
+por$G2_2 <- ifelse(por$G2 < 0, 0, por$G2)
+
+por$G2_log <- log(por$G2_2+1)
+por$G3_log <- log(por$G3+1)
+
+modelo_por2 <- lm(G3_log ~ G2_log - 1 + absences + address + sex, data = por)
+summary.lm(modelo_por2)
+```
+```{r echo=FALSE}
+stargazer(modelo_mat2, modelo_por2, type = "text")
+``` 
+
+- Con esta base, es importante mencionar que, a pesar de que las pruebas rechazan el supuesto de normalidad (tanto la Shapiro como otras más robustas a muestras grandes), no fue posible aceptarla. No obstente, por Teorema del Límite Central, es posible continuar con el ejercicio garantizando estimadores consistentes.
+
+```{r echo=FALSE, tab.cap= "Resultados de modelos corregidos"}
+# Normalidad de residuos (Shapiro-Wilk)
+shapiro_mat <- shapiro.test(residuals(modelo_mat2))
+shapiro_por <- shapiro.test(residuals(modelo_por2))
+
+# Homocedasticidad (Breusch-Pagan)
+bp_mat <- bptest(modelo_mat2)
+bp_por <- bptest(modelo_por2)
+
+# Independencia (Durbin-Watson)
+dw_mat <- durbinWatsonTest(modelo_mat2)
+dw_por <- durbinWatsonTest(modelo_por2)
+
+resultados_supuestos <- data.frame(
+Modelo = c("Matemáticas", "Portugués"),
+`p (Shapiro)` = c(shapiro_mat$p.value, shapiro_por$p.value),
+`p (Breusch-Pagan)` = c(bp_mat$p.value, bp_por$p.value),
+`p (Durbin-Watson)` = c(dw_mat$p, dw_por$p)
+)
+
+kable(resultados_supuestos,
+caption = "Pruebas de supuestos del modelo de regresión lineal simple",
+digits = 4)
+```
+
+- Dado que los niveles para rechazar heterocedasticidad mejoran en la prueba, pero no es posible rechazar la hipótesis alternativa; se estima la regresión mediante errores robustos "HC1" para garantizar residuos homocedásticos.
+
+- El supuesto de autocorrelación sigue cumpliéndose en ambos casos.
+
+  Los resultados obtenidos son los siguientes:
+  
+```{r echo=FALSE}
+coeftest(modelo_mat2, vcov = vcovHC(modelo_mat2, type="HC1"))
+```
+
+El modelo log-log estimado con errores estándar robustos (HC1) indica que las notas del período anterior (G2) son un fuerte predictor de la nota final (G3). Un aumento del 1% en G2 se asocia con un incremento aproximado del 1,12% en la nota final, con alta significancia estadística (p < 0,001). El contexto residencial también influye de manera relevante: los estudiantes que viven en zonas rurales o urbanas presentan notas finales alrededor de un 40% más bajas que los de la zona de referencia. Por su parte, el número de ausencias muestra un efecto positivo pequeño, y el sexo del estudiante no resulta significativo. En conjunto, los resultados sugieren que, además del desempeño previo, el entorno del estudiante es un determinante importante del rendimiento académico.
+
+# Valores hipotéticos de G2
+Para generar predicciones de las notas finales en Matemáticas y Portugués, se utilizó un modelo simplificado que considera únicamente la nota del período anterior (G2) como variable predictora. Esta elección responde a la intención de evaluar la relación directa entre el desempeño previo y el resultado final, evitando complicaciones asociadas a variables categóricas o factores adicionales. Al centrarnos en G2, el modelo permite calcular predicciones puntuales e intervalos de predicción de manera clara e interpretable, reflejando cómo la nota anterior influye en la nota final y mostrando la incertidumbre esperada para cada estudiante. Esta aproximación simplificada sirve como un punto de referencia para entender el efecto principal del desempeño previo antes de considerar modelos más complejos con múltiples covariables.
+
+```{r prediccionesg2, echo=FALSE, tab.cap="Predicciones puntuales e intervalos de predicción (95%) usando solo G2"}
+
+# Nuevos valores de G2
+G2_valores <- c(5, 10, 15, 18)
+nuevos_datos <- data.frame(
+  G2_log = log(G2_valores + 1)
+)
+
+# Predicciones
+modelo_g2_1 <- lm(G3_log ~ G2_log, data = mat)
+modelo_g2_2 <- lm(G3_log ~ G2_log, data = por)
+
+# Transformar a original
+pred_log_mat <- predict(modelo_g2_1, nuevos_datos, interval = "prediction", level = 0.95)
+pred_mat <- exp(pred_log_mat) - 1
+
+pred_log_por <- predict(modelo_g2_2, nuevos_datos, interval = "prediction", level = 0.95)
+pred_por <- exp(pred_log_por) - 1
+
+# Crear tabla final
+predicciones <- data.frame(
+  G2 = G2_valores,
+  `Pred. Matemáticas` = round(pred_mat[,1],2),
+  `LI Matemáticas` = round(pred_mat[,2],2),
+  `LS Matemáticas` = round(pred_mat[,3],2),
+  `Pred. Portugués` = round(pred_por[,1],2),
+  `LI Portugués` = round(pred_por[,2],2),
+  `LS Portugués` = round(pred_por[,3],2)
+)
+
+# Mostrar tabla
+kable(predicciones,
+      caption = "Predicciones puntuales e intervalos de predicción (95%) usando solo G2",
+      align = "c")
+```
+
+Los resultados muestran las predicciones puntuales de la nota final (G3) en Matemáticas y Portugués para distintos valores de la nota del período anterior (G2), junto con sus intervalos de predicción al 95%, que reflejan el rango donde es probable que caiga la nota de un estudiante individual. Esta elección permite evaluar de manera directa la influencia del desempeño previo sobre el resultado final, sin introducir la complejidad de variables adicionales.
+
+Los resultados muestran que a medida que aumenta la nota del período anterior, también lo hace la predicción promedio de la nota final: por ejemplo, un estudiante con G2 = 5 tiene una predicción de 3,92 en Matemáticas y 4,75 en Portugués, mientras que un estudiante con G2 = 18 tiene predicciones de 17,21 y 18,73, respectivamente. 
+
+Los intervalos de predicción al 95% reflejan la variabilidad individual esperada; por ejemplo, para G2 = 5, la nota real podría estar entre 0,80 y 12,48 en Matemáticas y entre 2,48 y 8,51 en Portugués.
+
+En resumen, el modelo permite estimar la nota final promedio de un estudiante dado su desempeño previo (G2), pero los intervalos muestran que para una predicción individual existe incertidumbre considerable.
+
+# Selección de modelo
+Para evaluar la capacidad predictiva de las notas finales de los estudiantes en ambas materias, es importante comparar diferentes especificaciones del modelo. Inicialmente se ajustó un modelo lineal simple utilizando las variables en su escala original (Lin-Lin), pero considerando que las notas y las variables predictoras pueden tener relaciones no lineales o distribuciones sesgadas, se propuso un modelo logarítmico-logarítmico (Log-Log).
+
+Esta transformación permite estabilizar la varianza, mejorar la linealidad y reducir la influencia de valores extremos. La comparación entre ambos modelos mediante criterios de selección, como AIC y BIC, permite determinar cuál especificación ofrece un mejor balance entre ajuste y parsimonia, facilitando la elección del modelo más adecuado para realizar predicciones precisas y confiables de la nota final.
+
+```{r echo=FALSE}
+# Ajuste de modelos (ejemplo)
+modelo_lin <- lm(G3 ~ G2, data = mat)          # lin-lin
+modelo_log <- lm(G3_log ~ G2_log, data = mat) # log-log
+
+# Crear tabla de criterios
+criterios_df <- data.frame(
+  Modelo = c("Lin-Lin", "Log-Log"),
+  AIC = c(AIC(modelo_lin), AIC(modelo_log)),
+  BIC = c(BIC(modelo_lin), BIC(modelo_log))
+)
+
+# Mostrar tabla con kableExtra
+library(kableExtra)
+
+kable(criterios_df,
+      align = "c",
+      caption = "Comparación de criterios de selección entre modelos Lin-Lin y Log-Log")
+```
+
+La tabla de criterios de selección muestra la comparación entre el modelo lineal-lineal (Lin-Lin) y el modelo logarítmico-logarítmico (Log-Log). Tanto el AIC como el BIC son considerablemente menores para el modelo Log-Log (AIC = 594.39; BIC = 606.33) que para el modelo Lin-Lin (AIC = 1653.66; BIC = 1665.60), lo que indica que el ajuste del modelo Log-Log es superior al Lin-Lin, incluso penalizando la complejidad del modelo. Esto sugiere que la transformación logarítmica de la variable predictora y de la variable respuesta mejora la capacidad del modelo para explicar la variabilidad de las notas finales, haciendo la predicción más precisa y confiable.
+
+# Anexos
+## Modelos de regresión estimados
+```{r echo=TRUE}
+# Crear columnas logarítmicas (evita log(0))
+mat$G2_2 <- ifelse(mat$G2 < 0, 0, mat$G2)
+
+mat$G2_log <- log(mat$G2_2 + 1)
+mat$G3_log <- log(mat$G3 + 1)
+
+modelo_mat2 <- lm(G3_log ~ G2_log - 1 + absences + address + sex, data = mat)
+summary.lm(modelo_mat2)
+``` 
+```{r echo=TRUE}
+# Crear columnas logarítmicas (evita log(0))
+por$G2_2 <- ifelse(por$G2 < 0, 0, por$G2)
+
+por$G2_log <- log(por$G2_2+1)
+por$G3_log <- log(por$G3+1)
+
+modelo_por2 <- lm(G3_log ~ G2_log - 1 + absences + address + sex, data = por)
+summary.lm(modelo_por2)
+```
+
+## Test de normalidad
+```{r echo=TRUE}
+#Otras pruebas de normalidad confirman el supuesto: nos acogemos al Teorema del Límite Central
+ad.test(residuals(modelo_mat2))
+ad.test(residuals(modelo_por2))
+```
+
+```{r converitr, eval=FALSE, include=FALSE}
+# Convertir R Markdown a script R
+purl(input = "Informe_taller_3-Brayan_Salgado.Rmd",   # ruta al archivo .Rmd
+      output = "Taller_3.R",      # nombre del archivo .R que se generará
+      documentation = 0)           # 0 = no incluir comentarios con texto markdown
+```
+
+## Guía de interpretación de la app Shiny: predicción de notas finales
+
+### Pestaña de Correlaciones
+
+Muestra la matriz de correlaciones entre la variable respuesta (nota final) y la variable predictora seleccionada.
+
+Los valores cercanos a 1 o -1 indican una fuerte relación positiva o negativa, respectivamente.
+
+Esta pestaña sirve para justificar la selección de la variable predictora que más explica la nota final.
+
+### Pestaña de Resumen del Modelo
+
+Presenta los coeficientes estimados del modelo lineal simple y su significancia estadística (p-valor).
+
+Incluye la variable predictora elegida y la constante (si aplica).
+
+Permite ver rápidamente qué tan influyente es cada variable sobre la nota final.
+
+### Pestaña de Diagnóstico
+
+Gráfico de residuos vs valores ajustados:
+
+- Permite verificar linealidad y homocedasticidad.
+
+- Los residuos deben dispersarse alrededor de cero sin patrón sistemático.
+
+Tabla de pruebas de supuestos:
+
+- Breusch-Pagan: evalúa homocedasticidad (varianza constante).
+
+- Durbin-Watson: evalúa autocorrelación de residuos.
+
+- Valores de p > 0.05 sugieren que no se viola el supuesto.
+
+Tabla de criterios AIC y BIC:
+
+- Permite comparar modelos alternativos: cuanto menor el valor, mejor ajuste penalizando la complejidad.
+
+- Útil si se prueba más de una variable predictora o transformación.
+
+### Pestaña de Predicciones
+
+Gráfico de predicciones con intervalos de confianza:
+
+- La línea azul muestra la nota media condicional estimada para cada valor de la variable predictora.
+
+- La banda azul indica intervalos de confianza (95%) para la media, permitiendo visualizar la incertidumbre.
+
+Tabla de predicciones puntuales:
+
+- Muestra las predicciones de la nota final para cada estudiante según el modelo ajustado.
+
+- Incluye intervalos de predicción que reflejan la variabilidad individual, más amplios que los intervalos de confianza de la media.
+
+- Si se usa un modelo log-log, las predicciones se transforman a la escala original para interpretación directa de las notas.
+
+### Uso general de la app
+
+El usuario puede seleccionar:
+
+- La materia (Matemáticas o Portugués)
+- La variable respuesta y la predictora
+- Excluir observaciones para evaluar cómo afectan los resultados
+- Activar o no la transformación logarítmica
+
+La app ajusta automáticamente el modelo y actualiza todas las pestañas: correlaciones, resumen, diagnóstico y predicciones.
+
+Permite realizar análisis exploratorio, verificación de supuestos y predicción de manera interactiva, lo que facilita tanto la comprensión estadística como la interpretación práctica de los resultados.
+
+# Referencias
+## Bibliográficas
+Cortez, P., & Silva, A. (2008). Using data mining to predict secondary school student performance. In Proceedings of 5th Annual Future Business Technology Conference (pp. 5–12).
+
+Desjardins, S. L., & Larose, S. (2016). Educational data mining: Applications and challenges. Journal of Learning Analytics, 3(2), 3–19. https://doi.org/10.18608/jla.2016.32.2
+
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (2013). An introduction to statistical learning with applications in R. Springer.
+
+## Software
+R Core Team. (2025). R: A language and environment for statistical computing [Computer software]. R Foundation for Statistical Computing. https://www.R-project.org/
+
+Chang, W., Cheng, J., Allaire, J., Xie, Y., & McPherson, J. (2025). shiny: Web application framework for R [R package]. https://CRAN.R-project.org/package=shiny
+
+Xie, Y., Allaire, J., & Grolemund, G. (2020). R Markdown: The definitive guide. Chapman & Hall/CRC. https://bookdown.org/yihui/rmarkdown/
+
+## Bases de datos
+Cortez, P., & Silva, A. (2008). Student performance data set. UCI Machine Learning Repository. https://archive.ics.uci.edu/ml/datasets/student+performance
