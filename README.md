@@ -122,43 +122,44 @@ All outputs are automatically saved for reproducibility.
 
 # 📌 Key Findings
 
-* A comparative modeling approach was used to evaluate the predictive performance of different functional specifications for final student grades.
+-   A comparative modeling approach was used to evaluate the predictive performance of different functional specifications for final student grades.
 
-* Two model forms were tested:
+-   Two model forms were tested:
 
-  - a standard linear specification (Lin–Lin).
+    -   a standard linear specification (Lin–Lin).
 
-  - a log–log specification designed to address potential nonlinearity, skewness, and heteroscedasticity.
+    -   a log–log specification designed to address potential nonlinearity, skewness, and heteroscedasticity.
 
-* Model selection criteria strongly favored the log–log specification, which achieved substantially lower information criteria values:
+-   Model selection criteria strongly favored the log–log specification, which achieved substantially lower information criteria values:
 
+<center>
 
 | Model   | AIC     | BIC     |
-| ------- | ------- | ------- |
+|---------|---------|---------|
 | Lin–Lin | 1653.66 | 1665.60 |
 | Log–Log | 594.39  | 606.33  |
 
+</center>
 
-* The large reduction in both AIC and BIC indicates that the log–log model provides a significantly better balance between goodness of fit and model parsimony.
+-   The large reduction in both AIC and BIC indicates that the log–log model provides a significantly better balance between goodness of fit and model parsimony.
 
-* Logarithmic transformation of both predictors and outcome improved variance stability, enhanced linearity, and reduced the influence of extreme values, resulting in more reliable and robust predictions of final academic performance.
+-   Logarithmic transformation of both predictors and outcome improved variance stability, enhanced linearity, and reduced the influence of extreme values, resulting in more reliable and robust predictions of final academic performance.
 
 Overall, model comparison demonstrates that functional form specification plays a critical role in predictive accuracy, and that log-transformed models offer a superior framework for explaining variation in student achievement.
 
 # 📊 Example Visualizations
 
-* Relationship Between Partial and Final Grades (Mathematics)
+-   Relationship Between Partial and Final Grades (Mathematics)
 
-![Relationship Between Partial and Final Grades (Mathematics)](C:/Users/basbo/Documents/GitHub/academic-performance-modeling/outputs/figuresfig-dispersion-1.png)
+![Relationship Between Partial and Final Grades (Mathematics)](https://github.com/BrySB/academic-performance-modeling/blob/main/outputs/figuresfig-dispersion-1.png?raw=true)
 
 This plot shows the strong linear relationship between intermediate assessments and final performance, supporting their predictive value in the modeling framework.
 
-* Distribution of Final Grades by Subject
+-   Distribution of Final Grades by Subject
 
-![Distribution of Final Grades by Subject](C:/Users/basbo/Documents/GitHub/academic-performance-modeling/outputs/figuresfig-boxplot-1.png)
+![Distribution of Final Grades by Subject](https://github.com/BrySB/academic-performance-modeling/blob/main/outputs/figuresfig-boxplot-1.png?raw=true)
 
 The distribution of final grades varies across subjects, revealing differences in central tendency and dispersion that are important for model specification and interpretation.
-
 
 Figures produced during the analysis include:
 
